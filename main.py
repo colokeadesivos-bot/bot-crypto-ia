@@ -5,7 +5,7 @@ import ta
 import json
 import os
 
-print("BOT INICIANDO...")
+print("🚀 BOT INICIANDO...")
 
 TELEGRAM_TOKEN = "8748500939:AAHAG6DctidBW4fVp2QQWgbiI-7mjWXt0O8"
 CHAT_ID = "8784442046"
@@ -25,7 +25,7 @@ if os.path.exists(WEIGHTS_FILE):
     with open(WEIGHTS_FILE, "r") as f:
         weights = json.load(f)
 
-# corrigir estrutura antiga
+# corrigir formato antigo
 if "rsi" in weights:
     print("Corrigindo pesos antigos...")
     weights = {}
@@ -39,8 +39,11 @@ def save():
         json.dump(weights, f)
 
 def send(msg):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
+    except Exception as e:
+        print("Erro Telegram:", e)
 
 def get_data(symbol):
     url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=15m&limit=200"
@@ -50,7 +53,7 @@ def get_data(symbol):
         data = response.json()
 
         if not isinstance(data, list):
-            print(f"Erro API Binance: {data}")
+            print(f"Erro API Binance ({symbol}): {data}")
             return None
 
         df = pd.DataFrame(data)
@@ -62,11 +65,6 @@ def get_data(symbol):
     except Exception as e:
         print("Erro ao buscar dados:", e)
         return None
-
-def get_weights(symbol):
-    if symbol not in weights:
-        weights[symbol] = {"rsi": 1.0, "trend": 1.0, "volume": 1.0}
-    return weights[symbol]
 
 def analyze(symbol):
     global history
@@ -102,8 +100,6 @@ def analyze(symbol):
 
     entry = last["close"]
     target = entry * 1.02 if signal == "COMPRA" else entry * 0.98
-
-    w = get_weights(symbol)
 
     trade = {
         "symbol": symbol,
@@ -149,15 +145,19 @@ def check_results():
 
     save()
 
-while True:
-    try:
-        analyze("BTCUSDT")
-        analyze("ETHUSDT")
-        check_results()
+def run_bot():
+    while True:
+        try:
+            analyze("BTCUSDT")
+            analyze("ETHUSDT")
+            check_results()
 
-        print("Rodando...")
-        time.sleep(600)
+            print("✅ Bot rodando...")
+            time.sleep(300)
 
-    except Exception as e:
-        print("Erro geral:", e)
-        time.sleep(60)
+        except Exception as e:
+            print("Erro geral:", e)
+            time.sleep(60)
+
+# 🚀 inicia o bot
+run_bot()
