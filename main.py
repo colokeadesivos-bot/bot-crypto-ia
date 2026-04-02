@@ -1,8 +1,9 @@
-import requests
+import yfinance as yf
 import pandas as pd
 import time
 import ta
 import threading
+import requests
 
 print("🚀 BOT INICIANDO...")
 
@@ -15,49 +16,35 @@ CHAT_ID = "8784442046"
 def send(msg):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        r = requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
-        print("📩 Telegram:", r.status_code)
+        requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
     except Exception as e:
         print("Erro Telegram:", e)
 
 # =========================
-# DADOS (COINGECKO BLINDADO)
+# DADOS (YFINANCE)
 # =========================
 def get_data(symbol):
     try:
-        pair = "bitcoin" if "BTC" in symbol else "ethereum"
+        ticker = "BTC-USD" if "BTC" in symbol else "ETH-USD"
 
-        url = f"https://api.coingecko.com/api/v3/coins/{pair}/market_chart?vs_currency=usd&days=1&interval=minute"
-        response = requests.get(url)
+        df = yf.download(ticker, period="1d", interval="5m")
 
-        if response.status_code != 200:
-            print("Erro API CoinGecko:", response.status_code)
+        if df.empty:
+            print("Sem dados:", symbol)
             return None
 
-        data = response.json()
-
-        if "prices" not in data:
-            print("Resposta inválida CoinGecko:", data)
-            return None
-
-        prices = data["prices"]
-
-        if not prices:
-            print("Sem dados de preço")
-            return None
-
-        df = pd.DataFrame(prices, columns=["time", "price"])
-
-        df["close"] = df["price"]
-        df["open"] = df["price"]
-        df["high"] = df["price"]
-        df["low"] = df["price"]
-        df["volume"] = 1
+        df = df.rename(columns={
+            "Open": "open",
+            "High": "high",
+            "Low": "low",
+            "Close": "close",
+            "Volume": "volume"
+        })
 
         return df
 
     except Exception as e:
-        print("Erro CoinGecko:", e)
+        print("Erro yfinance:", e)
         return None
 
 # =========================
@@ -69,7 +56,6 @@ def analyze(symbol):
     df = get_data(symbol)
 
     if df is None or df.empty:
-        print(f"Sem dados para {symbol}")
         return
 
     df["rsi"] = ta.momentum.RSIIndicator(df["close"]).rsi()
@@ -105,7 +91,7 @@ def analyze(symbol):
 Ativo: {symbol}
 Preço: {round(entry,2)}
 
-RSI: {round(last["rsi"],2)}
+RSI: {round(last['rsi'],2)}
 
 🎯 Alvo: {round(target,2)}
 🛑 Stop: {round(stop,2)}
@@ -131,7 +117,7 @@ def run_bot():
             time.sleep(300)
 
         except Exception as e:
-            print("⚠️ Erro geral:", e)
+            print("Erro:", e)
             time.sleep(30)
 
 # =========================
@@ -148,8 +134,5 @@ def keep_alive():
 threading.Thread(target=run_bot).start()
 threading.Thread(target=keep_alive).start()
 
-# =========================
-# LOOP INFINITO (ANTI PARADA)
-# =========================
 while True:
     time.sleep(1)
