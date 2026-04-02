@@ -2,8 +2,6 @@ import requests
 import pandas as pd
 import time
 import ta
-import json
-import os
 import threading
 
 print("🚀 BOT INICIANDO...")
@@ -12,42 +10,45 @@ TELEGRAM_TOKEN = "8748500939:AAHAG6DctidBW4fVp2QQWgbiI-7mjWXt0O8"
 CHAT_ID = "8784442046"
 
 # =========================
-# FUNÇÃO TELEGRAM
+# TELEGRAM
 # =========================
 def send(msg):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         r = requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
-        print("📩 Telegram status:", r.status_code)
+        print("📩 Telegram:", r.status_code)
     except Exception as e:
         print("Erro Telegram:", e)
 
 # =========================
-# DADOS BINANCE
+# DADOS (COINGECKO)
 # =========================
 def get_data(symbol):
-    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=15m&limit=200"
-    
     try:
+        pair = "bitcoin" if "BTC" in symbol else "ethereum"
+
+        url = f"https://api.coingecko.com/api/v3/coins/{pair}/market_chart?vs_currency=usd&days=1&interval=minute"
         response = requests.get(url)
         data = response.json()
 
-        if not isinstance(data, list):
-            print(f"Erro API Binance ({symbol}):", data)
-            return None
+        prices = data["prices"]
 
-        df = pd.DataFrame(data)
-        df = df.iloc[:, :6]
-        df.columns = ["time","open","high","low","close","volume"]
+        df = pd.DataFrame(prices, columns=["time", "price"])
 
-        return df.astype(float)
+        df["close"] = df["price"]
+        df["open"] = df["price"]
+        df["high"] = df["price"]
+        df["low"] = df["price"]
+        df["volume"] = 1
+
+        return df
 
     except Exception as e:
-        print("Erro ao buscar dados:", e)
+        print("Erro CoinGecko:", e)
         return None
 
 # =========================
-# CONTROLE DE SINAIS
+# CONTROLE
 # =========================
 last_signal = {}
 
@@ -116,11 +117,11 @@ def run_bot():
             time.sleep(300)
 
         except Exception as e:
-            print("⚠️ Erro geral:", e)
+            print("⚠️ Erro:", e)
             time.sleep(30)
 
 # =========================
-# HEARTBEAT (ANTI QUEDA)
+# KEEP ALIVE
 # =========================
 def keep_alive():
     while True:
@@ -128,13 +129,11 @@ def keep_alive():
         time.sleep(60)
 
 # =========================
-# INICIAR THREADS
+# THREADS
 # =========================
 threading.Thread(target=run_bot).start()
 threading.Thread(target=keep_alive).start()
 
-# =========================
-# LOOP INFINITO (NÃO DEIXA PARAR)
-# =========================
+# trava o processo
 while True:
     time.sleep(1)
