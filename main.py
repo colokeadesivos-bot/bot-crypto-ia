@@ -21,7 +21,7 @@ def send(msg):
         print("Erro Telegram:", e)
 
 # =========================
-# DADOS (COINGECKO)
+# DADOS (COINGECKO BLINDADO)
 # =========================
 def get_data(symbol):
     try:
@@ -29,9 +29,22 @@ def get_data(symbol):
 
         url = f"https://api.coingecko.com/api/v3/coins/{pair}/market_chart?vs_currency=usd&days=1&interval=minute"
         response = requests.get(url)
+
+        if response.status_code != 200:
+            print("Erro API CoinGecko:", response.status_code)
+            return None
+
         data = response.json()
 
+        if "prices" not in data:
+            print("Resposta inválida CoinGecko:", data)
+            return None
+
         prices = data["prices"]
+
+        if not prices:
+            print("Sem dados de preço")
+            return None
 
         df = pd.DataFrame(prices, columns=["time", "price"])
 
@@ -56,6 +69,7 @@ def analyze(symbol):
     df = get_data(symbol)
 
     if df is None or df.empty:
+        print(f"Sem dados para {symbol}")
         return
 
     df["rsi"] = ta.momentum.RSIIndicator(df["close"]).rsi()
@@ -117,7 +131,7 @@ def run_bot():
             time.sleep(300)
 
         except Exception as e:
-            print("⚠️ Erro:", e)
+            print("⚠️ Erro geral:", e)
             time.sleep(30)
 
 # =========================
@@ -134,6 +148,8 @@ def keep_alive():
 threading.Thread(target=run_bot).start()
 threading.Thread(target=keep_alive).start()
 
-# trava o processo
+# =========================
+# LOOP INFINITO (ANTI PARADA)
+# =========================
 while True:
     time.sleep(1)
