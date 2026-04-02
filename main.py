@@ -7,41 +7,30 @@ import os
 
 print("🚀 BOT INICIANDO...")
 
-TELEGRAM_TOKEN = "8748500939:AAHAG6DctidBW4fVp2QQWgbiI-7mjWXt0O8"
+TELEGRAM_TOKEN = "SEU_TOKEN_AQUI"
 CHAT_ID = "8784442046"
 
 HIST_FILE = "historico.json"
-WEIGHTS_FILE = "pesos.json"
 
-# carregar histórico
 history = []
 if os.path.exists(HIST_FILE):
-    with open(HIST_FILE, "r") as f:
-        history = json.load(f)
-
-# carregar pesos
-weights = {}
-if os.path.exists(WEIGHTS_FILE):
-    with open(WEIGHTS_FILE, "r") as f:
-        weights = json.load(f)
-
-# corrigir formato antigo
-if "rsi" in weights:
-    print("Corrigindo pesos antigos...")
-    weights = {}
+    try:
+        with open(HIST_FILE, "r") as f:
+            history = json.load(f)
+    except:
+        history = []
 
 last_signal = {}
 
 def save():
     with open(HIST_FILE, "w") as f:
         json.dump(history, f)
-    with open(WEIGHTS_FILE, "w") as f:
-        json.dump(weights, f)
 
 def send(msg):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
+        r = requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
+        print("📩 Telegram status:", r.status_code)
     except Exception as e:
         print("Erro Telegram:", e)
 
@@ -53,7 +42,7 @@ def get_data(symbol):
         data = response.json()
 
         if not isinstance(data, list):
-            print(f"Erro API Binance ({symbol}): {data}")
+            print(f"Erro API Binance ({symbol}):", data)
             return None
 
         df = pd.DataFrame(data)
@@ -67,8 +56,6 @@ def get_data(symbol):
         return None
 
 def analyze(symbol):
-    global history
-
     df = get_data(symbol)
 
     if df is None or df.empty:
@@ -80,10 +67,9 @@ def analyze(symbol):
 
     last = df.iloc[-1]
 
-    print(f"{symbol} RSI:", last["rsi"])
+    print(f"{symbol} RSI:", round(last["rsi"],2))
 
     signal = None
-    trend = "ALTA" if last["ema9"] > last["ema21"] else "BAIXA"
 
     if last["rsi"] < 35:
         signal = "COMPRA"
@@ -100,64 +86,39 @@ def analyze(symbol):
 
     entry = last["close"]
     target = entry * 1.02 if signal == "COMPRA" else entry * 0.98
-
-    trade = {
-        "symbol": symbol,
-        "entry": entry,
-        "target": target,
-        "signal": signal,
-        "time": time.time(),
-        "result": None
-    }
-
-    history.append(trade)
-    save()
+    stop = entry * 0.98 if signal == "COMPRA" else entry * 1.02
 
     msg = f"""
 🚨 SINAL IA
 
 Ativo: {symbol}
-Entrada: {round(entry,2)}
-Alvo: {round(target,2)}
+Preço: {round(entry,2)}
+
+RSI: {round(last["rsi"],2)}
+
+🎯 Alvo: {round(target,2)}
+🛑 Stop: {round(stop,2)}
 
 AÇÃO: {signal}
 """
+
     send(msg)
     print(msg)
-
-def check_results():
-    for trade in history:
-        if trade["result"] is not None:
-            continue
-
-        df = get_data(trade["symbol"])
-        if df is None:
-            continue
-
-        price = df.iloc[-1]["close"]
-
-        if trade["signal"] == "COMPRA" and price >= trade["target"]:
-            trade["result"] = "WIN"
-        elif trade["signal"] == "VENDA" and price <= trade["target"]:
-            trade["result"] = "WIN"
-        elif time.time() - trade["time"] > 1800:
-            trade["result"] = "LOSS"
-
-    save()
 
 def run_bot():
     while True:
         try:
+            print("🔄 Nova execução...")
+
             analyze("BTCUSDT")
             analyze("ETHUSDT")
-            check_results()
 
-            print("✅ Bot rodando...")
+            print("✅ Bot rodando...\n")
             time.sleep(300)
 
         except Exception as e:
-            print("Erro geral:", e)
-            time.sleep(60)
+            print("⚠️ Erro geral:", e)
+            time.sleep(30)
 
 # 🚀 inicia o bot
 run_bot()
