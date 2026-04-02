@@ -4,28 +4,16 @@ import time
 import ta
 import json
 import os
+import threading
 
 print("🚀 BOT INICIANDO...")
 
 TELEGRAM_TOKEN = "8748500939:AAHAG6DctidBW4fVp2QQWgbiI-7mjWXt0O8"
 CHAT_ID = "8784442046"
 
-HIST_FILE = "historico.json"
-
-history = []
-if os.path.exists(HIST_FILE):
-    try:
-        with open(HIST_FILE, "r") as f:
-            history = json.load(f)
-    except:
-        history = []
-
-last_signal = {}
-
-def save():
-    with open(HIST_FILE, "w") as f:
-        json.dump(history, f)
-
+# =========================
+# FUNÇÃO TELEGRAM
+# =========================
 def send(msg):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -34,6 +22,9 @@ def send(msg):
     except Exception as e:
         print("Erro Telegram:", e)
 
+# =========================
+# DADOS BINANCE
+# =========================
 def get_data(symbol):
     url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=15m&limit=200"
     
@@ -55,6 +46,11 @@ def get_data(symbol):
         print("Erro ao buscar dados:", e)
         return None
 
+# =========================
+# CONTROLE DE SINAIS
+# =========================
+last_signal = {}
+
 def analyze(symbol):
     df = get_data(symbol)
 
@@ -67,7 +63,7 @@ def analyze(symbol):
 
     last = df.iloc[-1]
 
-    print(f"{symbol} RSI:", round(last["rsi"],2))
+    print(f"{symbol} RSI:", round(last["rsi"], 2))
 
     signal = None
 
@@ -105,6 +101,9 @@ AÇÃO: {signal}
     send(msg)
     print(msg)
 
+# =========================
+# LOOP PRINCIPAL
+# =========================
 def run_bot():
     while True:
         try:
@@ -120,5 +119,22 @@ def run_bot():
             print("⚠️ Erro geral:", e)
             time.sleep(30)
 
-# 🚀 inicia o bot
-run_bot()
+# =========================
+# HEARTBEAT (ANTI QUEDA)
+# =========================
+def keep_alive():
+    while True:
+        print("💓 Servidor ativo...")
+        time.sleep(60)
+
+# =========================
+# INICIAR THREADS
+# =========================
+threading.Thread(target=run_bot).start()
+threading.Thread(target=keep_alive).start()
+
+# =========================
+# LOOP INFINITO (NÃO DEIXA PARAR)
+# =========================
+while True:
+    time.sleep(1)
