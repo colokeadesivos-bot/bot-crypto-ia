@@ -21,7 +21,7 @@ def send(msg):
         print("Erro Telegram:", e)
 
 # =========================
-# DADOS (YFINANCE)
+# DADOS (YFINANCE CORRIGIDO)
 # =========================
 def get_data(symbol):
     try:
@@ -33,13 +33,13 @@ def get_data(symbol):
             print("Sem dados:", symbol)
             return None
 
-        df = df.rename(columns={
-            "Open": "open",
-            "High": "high",
-            "Low": "low",
-            "Close": "close",
-            "Volume": "volume"
-        })
+        df = df.copy()
+
+        # Corrige nomes das colunas
+        df.columns = [col.lower() for col in df.columns]
+
+        # Garante que é 1D (resolve erro RSI)
+        df["close"] = df["close"].squeeze()
 
         return df
 
@@ -56,36 +56,40 @@ def analyze(symbol):
     df = get_data(symbol)
 
     if df is None or df.empty:
+        print(f"Sem dados para {symbol}")
         return
 
-    df["rsi"] = ta.momentum.RSIIndicator(df["close"]).rsi()
-    df["ema9"] = ta.trend.EMAIndicator(df["close"], 9).ema_indicator()
-    df["ema21"] = ta.trend.EMAIndicator(df["close"], 21).ema_indicator()
+    try:
+        close = df["close"].squeeze()
 
-    last = df.iloc[-1]
+        df["rsi"] = ta.momentum.RSIIndicator(close).rsi()
+        df["ema9"] = ta.trend.EMAIndicator(close, 9).ema_indicator()
+        df["ema21"] = ta.trend.EMAIndicator(close, 21).ema_indicator()
 
-    print(f"{symbol} RSI:", round(last["rsi"], 2))
+        last = df.iloc[-1]
 
-    signal = None
+        print(f"{symbol} RSI:", round(last["rsi"], 2))
 
-    if last["rsi"] < 35:
-        signal = "COMPRA"
-    elif last["rsi"] > 65:
-        signal = "VENDA"
+        signal = None
 
-    if not signal:
-        return
+        if last["rsi"] < 35:
+            signal = "COMPRA"
+        elif last["rsi"] > 65:
+            signal = "VENDA"
 
-    if last_signal.get(symbol) == signal:
-        return
+        if not signal:
+            return
 
-    last_signal[symbol] = signal
+        if last_signal.get(symbol) == signal:
+            return
 
-    entry = last["close"]
-    target = entry * 1.02 if signal == "COMPRA" else entry * 0.98
-    stop = entry * 0.98 if signal == "COMPRA" else entry * 1.02
+        last_signal[symbol] = signal
 
-    msg = f"""
+        entry = float(last["close"])
+        target = entry * 1.02 if signal == "COMPRA" else entry * 0.98
+        stop = entry * 0.98 if signal == "COMPRA" else entry * 1.02
+
+        msg = f"""
 🚨 SINAL IA
 
 Ativo: {symbol}
@@ -99,8 +103,11 @@ RSI: {round(last['rsi'],2)}
 AÇÃO: {signal}
 """
 
-    send(msg)
-    print(msg)
+        send(msg)
+        print(msg)
+
+    except Exception as e:
+        print("Erro análise:", e)
 
 # =========================
 # LOOP PRINCIPAL
@@ -117,7 +124,7 @@ def run_bot():
             time.sleep(300)
 
         except Exception as e:
-            print("Erro:", e)
+            print("Erro geral:", e)
             time.sleep(30)
 
 # =========================
@@ -134,5 +141,6 @@ def keep_alive():
 threading.Thread(target=run_bot).start()
 threading.Thread(target=keep_alive).start()
 
+# trava o processo (evita parar no Railway)
 while True:
     time.sleep(1)
