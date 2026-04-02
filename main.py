@@ -5,30 +5,30 @@ import ta
 import json
 import os
 
+print("BOT INICIANDO...")
+
 TELEGRAM_TOKEN = "8748500939:AAHAG6DctidBW4fVp2QQWgbiI-7mjWXt0O8"
 CHAT_ID = "8784442046"
 
 HIST_FILE = "historico.json"
 WEIGHTS_FILE = "pesos.json"
 
-# 🔥 carregar histórico
+# carregar histórico
+history = []
 if os.path.exists(HIST_FILE):
     with open(HIST_FILE, "r") as f:
         history = json.load(f)
-else:
-    history = []
 
-# 🔥 carregar pesos com correção automática
+# carregar pesos
+weights = {}
 if os.path.exists(WEIGHTS_FILE):
     with open(WEIGHTS_FILE, "r") as f:
         weights = json.load(f)
-else:
-    weights = {}
 
-# 🔥 CORREÇÃO AUTOMÁTICA DE FORMATO ANTIGO
+# corrigir estrutura antiga
 if "rsi" in weights:
-    print("Corrigindo estrutura antiga de pesos...")
-    weights = {}  # limpa estrutura antiga
+    print("Corrigindo pesos antigos...")
+    weights = {}
 
 last_signal = {}
 
@@ -44,50 +44,45 @@ def send(msg):
 
 def get_data(symbol):
     url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=15m&limit=200"
-    data = requests.get(url).json()
+    
+    try:
+        response = requests.get(url)
+        data = response.json()
 
-    df = pd.DataFrame(data)
-    df = df.iloc[:, :6]
-    df.columns = ["time","open","high","low","close","volume"]
+        if not isinstance(data, list):
+            print(f"Erro API Binance: {data}")
+            return None
 
-    return df.astype(float)
+        df = pd.DataFrame(data)
+        df = df.iloc[:, :6]
+        df.columns = ["time","open","high","low","close","volume"]
+
+        return df.astype(float)
+
+    except Exception as e:
+        print("Erro ao buscar dados:", e)
+        return None
 
 def get_weights(symbol):
     if symbol not in weights:
         weights[symbol] = {"rsi": 1.0, "trend": 1.0, "volume": 1.0}
     return weights[symbol]
 
-def calculate_confidence(df, signal, trend, w):
-    last = df.iloc[-1]
-    prev = df.iloc[-2]
-
-    score = 50
-
-    if signal == "COMPRA" and last["rsi"] < 30:
-        score += 10 * w["rsi"]
-    if signal == "VENDA" and last["rsi"] > 70:
-        score += 10 * w["rsi"]
-
-    if trend == "ALTA" and signal == "COMPRA":
-        score += 10 * w["trend"]
-    if trend == "BAIXA" and signal == "VENDA":
-        score += 10 * w["trend"]
-
-    if last["volume"] > prev["volume"]:
-        score += 10 * w["volume"]
-
-    return min(int(score), 95)
-
 def analyze(symbol):
     global history
 
     df = get_data(symbol)
+
+    if df is None or df.empty:
+        return
 
     df["rsi"] = ta.momentum.RSIIndicator(df["close"]).rsi()
     df["ema9"] = ta.trend.EMAIndicator(df["close"], 9).ema_indicator()
     df["ema21"] = ta.trend.EMAIndicator(df["close"], 21).ema_indicator()
 
     last = df.iloc[-1]
+
+    print(f"{symbol} RSI:", last["rsi"])
 
     signal = None
     trend = "ALTA" if last["ema9"] > last["ema21"] else "BAIXA"
@@ -109,14 +104,12 @@ def analyze(symbol):
     target = entry * 1.02 if signal == "COMPRA" else entry * 0.98
 
     w = get_weights(symbol)
-    confidence = calculate_confidence(df, signal, trend, w)
 
     trade = {
         "symbol": symbol,
         "entry": entry,
         "target": target,
         "signal": signal,
-        "confidence": confidence,
         "time": time.time(),
         "result": None
     }
@@ -125,50 +118,34 @@ def analyze(symbol):
     save()
 
     msg = f"""
-🤖 IA EVOLUTIVA
+🚨 SINAL IA
 
 Ativo: {symbol}
 Entrada: {round(entry,2)}
 Alvo: {round(target,2)}
 
-Confiança: {confidence}%
 AÇÃO: {signal}
 """
     send(msg)
     print(msg)
 
 def check_results():
-    global weights
-
     for trade in history:
         if trade["result"] is not None:
             continue
 
         df = get_data(trade["symbol"])
+        if df is None:
+            continue
+
         price = df.iloc[-1]["close"]
 
         if trade["signal"] == "COMPRA" and price >= trade["target"]:
             trade["result"] = "WIN"
-
         elif trade["signal"] == "VENDA" and price <= trade["target"]:
             trade["result"] = "WIN"
-
         elif time.time() - trade["time"] > 1800:
             trade["result"] = "LOSS"
-
-        else:
-            continue
-
-        w = get_weights(trade["symbol"])
-
-        if trade["result"] == "WIN":
-            w["rsi"] += 0.1
-            w["trend"] += 0.1
-            w["volume"] += 0.1
-        else:
-            w["rsi"] -= 0.05
-            w["trend"] -= 0.05
-            w["volume"] -= 0.05
 
     save()
 
@@ -178,10 +155,9 @@ while True:
         analyze("ETHUSDT")
         check_results()
 
-        print("Pesos atualizados:", weights)
-
+        print("Rodando...")
         time.sleep(600)
 
     except Exception as e:
-        print("Erro:", e)
+        print("Erro geral:", e)
         time.sleep(60)
