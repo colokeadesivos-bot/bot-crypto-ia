@@ -20,21 +20,21 @@ def send_telegram(msg):
     data = {"chat_id": CHAT_ID, "text": msg}
     try:
         requests.post(url, data=data)
-    except:
-        print("Erro Telegram")
+    except Exception as e:
+        print(f"Erro Telegram: {e}")
 
 # =========================
 # DADOS
 # =========================
 def get_data(symbol):
     try:
-        df = yf.download(symbol, period="1d", interval="5m")
+        df = yf.download(symbol, period="1d", interval="5m", progress=False)
 
         if df is None or df.empty:
             return None
 
         df = df[['Open', 'High', 'Low', 'Close', 'Volume']]
-        df.dropna(inplace=True)
+        df = df.dropna()
 
         return df
     except Exception as e:
@@ -49,8 +49,8 @@ def indicators(df):
     df['ema21'] = df['Close'].ewm(span=21).mean()
 
     delta = df['Close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(7).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(7).mean()
+    gain = delta.clip(lower=0).rolling(7).mean()
+    loss = (-delta.clip(upper=0)).rolling(7).mean()
     rs = gain / loss
     df['rsi'] = 100 - (100 / (1 + rs))
 
@@ -60,12 +60,12 @@ def indicators(df):
     return df
 
 # =========================
-# ESTRATÉGIA INSANA
+# ANÁLISE INSANA (CORRIGIDA)
 # =========================
 def analyze(df):
     try:
         df = indicators(df)
-        df.dropna(inplace=True)
+        df = df.dropna()
 
         if len(df) < 30:
             return None
@@ -73,11 +73,22 @@ def analyze(df):
         last = df.iloc[-1]
         prev = df.iloc[-2]
 
+        # FORÇAR FLOAT (corrige erro Series)
+        close = float(last['Close'])
+        prev_close = float(prev['Close'])
+        ema9 = float(last['ema9'])
+        ema21 = float(last['ema21'])
+        rsi = float(last['rsi'])
+        volume = float(last['Volume'])
+        vol_mean = float(last['vol_mean'])
+        volatility = float(last['volatility'])
+        avg_volatility = float(df['volatility'].mean())
+
         signal = None
         score = 0
 
         # TENDÊNCIA
-        if last['ema9'] > last['ema21']:
+        if ema9 > ema21:
             trend = "UP"
             score += 1
         else:
@@ -85,23 +96,23 @@ def analyze(df):
             score += 1
 
         # MOMENTO
-        if trend == "UP" and last['rsi'] < 75:
+        if trend == "UP" and rsi < 75:
             signal = "COMPRA"
             score += 1
-        elif trend == "DOWN" and last['rsi'] > 25:
+        elif trend == "DOWN" and rsi > 25:
             signal = "VENDA"
             score += 1
 
         # VOLUME
-        if last['Volume'] > last['vol_mean']:
+        if volume > vol_mean:
             score += 1
 
         # VOLATILIDADE
-        if last['volatility'] > df['volatility'].mean():
+        if volatility > avg_volatility:
             score += 1
 
-        # FORÇA MOVIMENTO
-        movement = abs(last['Close'] - prev['Close']) / prev['Close']
+        # FORÇA DO MOVIMENTO
+        movement = abs(close - prev_close) / prev_close
         if movement > 0.001:
             score += 1
 
@@ -114,26 +125,22 @@ def analyze(df):
         if confidence < 0.45:
             return None
 
-        # =========================
-        # STOP E ALVO
-        # =========================
-        entry = last['Close']
-
+        # STOP / TARGET
         if signal == "COMPRA":
-            stop = entry * 0.98
-            target = entry * 1.03
+            stop = close * 0.98
+            target = close * 1.03
         else:
-            stop = entry * 1.02
-            target = entry * 0.97
+            stop = close * 1.02
+            target = close * 0.97
 
-        return signal, confidence, entry, stop, target
+        return signal, confidence, close, stop, target
 
     except Exception as e:
         print(f"Erro análise: {e}")
         return None
 
 # =========================
-# LOOP
+# LOOP PRINCIPAL
 # =========================
 def run():
     print("🚀 BOT INSANO INICIANDO...")
@@ -165,8 +172,8 @@ def run():
 🛑 Stop: {round(stop,2)}
 
 📊 Confiança: {confidence:.2%}
-⚡ Modo: Agressivo Profissional
-                """
+⚡ Estratégia: IA + Volume + Volatilidade
+"""
 
                 print(msg)
                 send_telegram(msg)
