@@ -1,118 +1,201 @@
 import requests
-import numpy as np
-import pandas as pd
+import threading
 import time
+import numpy as np
 
-# ==============================
-# TELEGRAM
-# ==============================
-TOKEN = "8748500939:AAHAG6DctidBW4fVp2QQWgbiI-7mjWXt0O8"
+# =========================
+# CONFIG
+# =========================
+TELEGRAM_TOKEN = "8748500939:AAHAG6DctidBW4fVp2QQWgbiI-7mjWXt0O8"
 CHAT_ID = "8784442046"
 
-def enviar_mensagem(msg):
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    payload = {"chat_id": CHAT_ID, "text": msg}
+SYMBOLS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"]
+
+ULTIMO_DADO = {}
+
+# =========================
+# TELEGRAM
+# =========================
+def send_telegram(msg):
     try:
-        requests.post(url, data=payload)
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
     except:
-        pass
+        print("Erro Telegram")
 
-# ==============================
-# BYBIT DATA (CORRIGIDO)
-# ==============================
-def get_data(symbol="BTCUSDT"):
-    url = "https://api.bybit.com/v5/market/kline"
-
-    params = {
-        "category": "linear",
-        "symbol": symbol,
-        "interval": "1",
-        "limit": 200
-    }
-
+# =========================
+# APIS
+# =========================
+def get_bybit(symbol):
     try:
-        response = requests.get(url, params=params, timeout=10)
-        data = response.json()
+        url = "https://api.bybit.com/v5/market/kline"
+        params = {"category": "linear", "symbol": symbol, "interval": "1", "limit": 100}
+        r = requests.get(url, params=params, timeout=5)
+        data = r.json()
 
-        if data["retCode"] != 0:
-            print(f"{symbol} erro API")
-            return None
+        if data.get("retCode") == 0:
+            candles = data["result"]["list"][::-1]
+            return [float(c[4]) for c in candles]
 
-        candles = data["result"]["list"]
-        candles = candles[::-1]
-
-        closes = [float(c[4]) for c in candles]
-
-        return closes
-
-    except Exception as e:
-        print(f"Erro conexão: {e}")
+    except:
         return None
 
-# ==============================
-# INDICADORES
-# ==============================
-def calcular_ema(data, periodo):
-    return pd.Series(data).ewm(span=periodo).mean().iloc[-1]
 
-def calcular_rsi(data, periodo=14):
-    series = pd.Series(data)
-    delta = series.diff()
+def get_binance(symbol):
+    try:
+        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=100"
+        r = requests.get(url, timeout=5)
+        data = r.json()
 
-    gain = (delta.where(delta > 0, 0)).rolling(periodo).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(periodo).mean()
+        return [float(c[4]) for c in data]
 
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-
-    return rsi.iloc[-1]
-
-# ==============================
-# ESTRATÉGIA (AGRESSIVA)
-# ==============================
-def analisar(par, dados):
-    if dados is None or len(dados) < 50:
+    except:
         return None
 
-    preco = dados[-1]
 
-    ema9 = calcular_ema(dados, 9)
-    ema21 = calcular_ema(dados, 21)
-    rsi = calcular_rsi(dados)
+def get_okx(symbol):
+    try:
+        inst = symbol.replace("USDT", "-USDT")
+        url = f"https://www.okx.com/api/v5/market/candles?instId={inst}&bar=1m&limit=100"
+        r = requests.get(url, timeout=5)
+        data = r.json()
 
-    # 🎯 Lógica agressiva
-    if preco > ema9 > ema21 and rsi < 70:
-        return f"🚀 COMPRA {par}\nPreço: {preco:.2f}\nRSI: {rsi:.1f}"
+        candles = data["data"][::-1]
+        return [float(c[4]) for c in candles]
 
-    if preco < ema9 < ema21 and rsi > 30:
-        return f"🔻 VENDA {par}\nPreço: {preco:.2f}\nRSI: {rsi:.1f}"
+    except:
+        return None
+
+
+# =========================
+# MULTI FETCH
+# =========================
+def fetch_parallel(symbol):
+    results = []
+
+    def worker(func):
+        data = func(symbol)
+        if data and len(data) > 20:
+            results.append(data)
+
+    threads = []
+    for func in [get_bybit, get_binance, get_okx]:
+        t = threading.Thread(target=worker, args=(func,))
+        t.start()
+        threads.append(t)
+
+    for t in threads:
+        t.join(timeout=6)
+
+    if results:
+        return results[0]
 
     return None
 
-# ==============================
+
+def get_data(symbol):
+    global ULTIMO_DADO
+
+    data = fetch_parallel(symbol)
+
+    if data:
+        ULTIMO_DADO[symbol] = data
+        print(f"{symbol} OK")
+        return data
+
+    if symbol in ULTIMO_DADO:
+        print(f"{symbol} CACHE")
+        return ULTIMO_DADO[symbol]
+
+    print(f"{symbol} FALHA TOTAL")
+    return None
+
+
+# =========================
+# INDICADORES (SEGURO)
+# =========================
+def sma(data, period=14):
+    data = np.array(data)
+    if len(data) < period:
+        return None
+    return float(np.mean(data[-period:]))
+
+
+def rsi(data, period=14):
+    data = np.array(data)
+
+    if len(data) < period + 1:
+        return None
+
+    delta = np.diff(data)
+
+    gain = np.where(delta > 0, delta, 0)
+    loss = np.where(delta < 0, -delta, 0)
+
+    avg_gain = np.mean(gain[-period:])
+    avg_loss = np.mean(loss[-period:])
+
+    if avg_loss == 0:
+        return 100
+
+    rs = avg_gain / avg_loss
+    return float(100 - (100 / (1 + rs)))
+
+
+# =========================
+# ESTRATÉGIA (AGRESSIVA)
+# =========================
+def analyze(symbol):
+    data = get_data(symbol)
+
+    if not data:
+        return
+
+    price = float(data[-1])
+
+    sma_9 = sma(data, 9)
+    sma_21 = sma(data, 21)
+    rsi_val = rsi(data, 14)
+
+    if sma_9 is None or sma_21 is None or rsi_val is None:
+        return
+
+    # =========================
+    # LÓGICA INSANA (AGRESSIVA)
+    # =========================
+    if sma_9 > sma_21 and rsi_val < 70:
+        msg = f"🚀 COMPRA {symbol}\nPreço: {price:.2f}\nRSI: {rsi_val:.1f}"
+        print(msg)
+        send_telegram(msg)
+
+    elif sma_9 < sma_21 and rsi_val > 30:
+        msg = f"🔻 VENDA {symbol}\nPreço: {price:.2f}\nRSI: {rsi_val:.1f}"
+        print(msg)
+        send_telegram(msg)
+
+    else:
+        print(f"{symbol} neutro")
+
+
+# =========================
 # LOOP PRINCIPAL
-# ==============================
-pares = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"]
+# =========================
+def run_bot():
+    print("💎 MODO INSTITUCIONAL ATIVO")
 
-print("💎 BOT INSTITUCIONAL ATIVO")
-enviar_mensagem("💎 BOT INSTITUCIONAL ATIVO")
+    while True:
+        for symbol in SYMBOLS:
+            try:
+                analyze(symbol)
+            except Exception as e:
+                print(f"Erro {symbol}: {e}")
 
-while True:
-    print("\n🔄 Nova execução...")
+        print("⏳ aguardando...\n")
+        time.sleep(60)
 
-    for par in pares:
-        dados = get_data(par)
 
-        if dados is None:
-            print(f"{par} sem dados")
-            continue
-
-        sinal = analisar(par, dados)
-
-        if sinal:
-            print(sinal)
-            enviar_mensagem(sinal)
-        else:
-            print(f"{par} sem sinal")
-
-    time.sleep(60)
+# =========================
+# START
+# =========================
+if __name__ == "__main__":
+    run_bot()
