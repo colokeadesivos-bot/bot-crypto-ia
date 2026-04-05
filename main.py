@@ -1,14 +1,12 @@
 import requests
 import time
-import os
 import pandas as pd
-import yfinance as yf
 
 TOKEN = "8748500939:AAHAG6DctidBW4fVp2QQWgbiI-7mjWXt0O8"
 CHAT_ID = "8784442046"
 
 # =========================
-# ENVIO TELEGRAM
+# TELEGRAM
 # =========================
 def enviar_mensagem(msg):
     try:
@@ -18,67 +16,112 @@ def enviar_mensagem(msg):
         print("Erro ao enviar mensagem")
 
 # =========================
-# PEGAR DADOS CORRETAMENTE
+# DADOS BYBIT
 # =========================
 def pegar_dados(par):
     try:
-        df = yf.download(par, period="1d", interval="5m")
+        url = f"https://api.bybit.com/v5/market/kline?category=linear&symbol={par}&interval=5&limit=100"
+        res = requests.get(url).json()
 
-        if df.empty:
+        lista = res.get("result", {}).get("list", [])
+
+        if not lista:
             return None
 
-        # 🔥 CORREÇÃO PRINCIPAL AQUI
-        df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
+        df = pd.DataFrame(lista)
 
+        # Bybit retorna invertido (mais recente primeiro)
+        df = df[::-1]
+
+        df = df[[4]]  # preço de fechamento
+        df.columns = ["Close"]
+
+        df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
         df.dropna(inplace=True)
 
         return df
 
     except Exception as e:
-        print(f"Erro yfinance: {e}")
+        print(f"Erro Bybit: {e}")
         return None
 
 # =========================
-# INDICADORES
+# RSI
+# =========================
+def calcular_rsi(series, periodo=14):
+    delta = series.diff()
+    ganho = delta.clip(lower=0)
+    perda = -delta.clip(upper=0)
+
+    media_ganho = ganho.rolling(periodo).mean()
+    media_perda = perda.rolling(periodo).mean()
+
+    rs = media_ganho / media_perda
+    rsi = 100 - (100 / (1 + rs))
+
+    return rsi
+
+# =========================
+# ANÁLISE PROFISSIONAL
 # =========================
 def analisar(df):
     try:
         close = df["Close"]
 
-        # 🔥 GARANTE VALOR ESCALAR
+        if len(close) < 30:
+            return None
+
         ultimo = float(close.iloc[-1])
         anterior = float(close.iloc[-2])
 
-        # Médias
-        media_curta = float(close.tail(5).mean())
-        media_longa = float(close.tail(20).mean())
+        media_curta = close.rolling(5).mean().iloc[-1]
+        media_longa = close.rolling(20).mean().iloc[-1]
 
-        # Momentum
+        rsi = calcular_rsi(close).iloc[-1]
+
         variacao = (ultimo - anterior) / anterior
 
-        # =====================
-        # MODO INSANO 🔥
-        # =====================
-        if media_curta > media_longa and variacao > 0.001:
-            return "COMPRA 🚀"
+        score = 0
 
-        elif media_curta < media_longa and variacao < -0.001:
-            return "VENDA 🔻"
+        # Tendência
+        if media_curta > media_longa:
+            score += 30
+        else:
+            score -= 30
+
+        # Momentum
+        if variacao > 0:
+            score += 20
+        else:
+            score -= 20
+
+        # RSI
+        if rsi < 30:
+            score += 30
+        elif rsi > 70:
+            score -= 30
+
+        # DECISÃO
+        if score >= 50:
+            return f"COMPRA 🚀 | Score: {score} | RSI: {round(rsi,2)}"
+
+        elif score <= -50:
+            return f"VENDA 🔻 | Score: {score} | RSI: {round(rsi,2)}"
 
         else:
             return None
 
     except Exception as e:
-        print(f"Erro análise: {e}")
+        print("Erro análise:", e)
         return None
 
 # =========================
-# LOOP PRINCIPAL
+# LOOP
 # =========================
 def rodar():
-    pares = ["BTC-USD", "ETH-USD", "BNB-USD", "SOL-USD", "XRP-USD"]
+    pares = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"]
 
-    print("🚀 BOT INSANO INICIANDO...")
+    print("💎 SISTEMA BYBIT ATIVO")
 
     while True:
         print("🔄 Nova execução...")
@@ -86,7 +129,7 @@ def rodar():
         for par in pares:
             df = pegar_dados(par)
 
-            if df is None:
+            if df is None or df.empty:
                 print(f"{par} sem dados")
                 continue
 
@@ -102,7 +145,4 @@ def rodar():
         print("💓 Bot vivo...")
         time.sleep(60)
 
-# =========================
-# START
-# =========================
 rodar()
