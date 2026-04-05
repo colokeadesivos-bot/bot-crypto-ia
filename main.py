@@ -1,198 +1,118 @@
 import requests
-import time
+import numpy as np
 import pandas as pd
+import time
 
+# ==============================
+# TELEGRAM
+# ==============================
 TOKEN = "8748500939:AAHAG6DctidBW4fVp2QQWgbiI-7mjWXt0O8"
 CHAT_ID = "8784442046"
 
-# =========================
-# TELEGRAM
-# =========================
 def enviar_mensagem(msg):
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    payload = {"chat_id": CHAT_ID, "text": msg}
     try:
-        url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-        requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
+        requests.post(url, data=payload)
     except:
-        print("Erro Telegram")
+        pass
 
-# =========================
-# DADOS (BYBIT + BINANCE)
-# =========================
-def pegar_dados(par):
+# ==============================
+# BYBIT DATA (CORRIGIDO)
+# ==============================
+def get_data(symbol="BTCUSDT"):
+    url = "https://api.bybit.com/v5/market/kline"
 
-    # ===== BYBIT =====
+    params = {
+        "category": "linear",
+        "symbol": symbol,
+        "interval": "1",
+        "limit": 200
+    }
+
     try:
-        url = f"https://api.bybit.com/v5/market/kline?category=linear&symbol={par}&interval=5&limit=100"
-        r = requests.get(url, timeout=10)
+        response = requests.get(url, params=params, timeout=10)
+        data = response.json()
 
-        if r.status_code == 200:
-            data = r.json()
-            lista = data.get("result", {}).get("list", [])
-
-            if lista:
-                df = pd.DataFrame(lista)
-                df = df[::-1]
-
-                df = df[[4]]
-                df.columns = ["Close"]
-
-                df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
-                df.dropna(inplace=True)
-
-                print(f"{par} OK (Bybit)")
-                return df
-    except:
-        print(f"{par} erro Bybit")
-
-    # ===== BINANCE =====
-    try:
-        url = f"https://api.binance.com/api/v3/klines?symbol={par}&interval=5m&limit=100"
-        r = requests.get(url, timeout=10)
-
-        if r.status_code == 200:
-            data = r.json()
-
-            if data:
-                df = pd.DataFrame(data)
-
-                df = df[[4]]
-                df.columns = ["Close"]
-
-                df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
-                df.dropna(inplace=True)
-
-                print(f"{par} OK (Binance)")
-                return df
-    except:
-        print(f"{par} erro Binance")
-
-    print(f"{par} sem dados (falha total)")
-    return None
-
-# =========================
-# RSI
-# =========================
-def calcular_rsi(series, periodo=14):
-    delta = series.diff()
-
-    ganho = delta.clip(lower=0)
-    perda = -delta.clip(upper=0)
-
-    media_ganho = ganho.rolling(periodo).mean()
-    media_perda = perda.rolling(periodo).mean()
-
-    rs = media_ganho / media_perda
-    return 100 - (100 / (1 + rs))
-
-# =========================
-# ANÁLISE INSTITUCIONAL
-# =========================
-def analisar(df):
-    try:
-        close = df["Close"]
-
-        if len(close) < 30:
+        if data["retCode"] != 0:
+            print(f"{symbol} erro API")
             return None
 
-        ultimo = float(close.iloc[-1])
-        anterior = float(close.iloc[-2])
+        candles = data["result"]["list"]
+        candles = candles[::-1]
 
-        media5 = float(close.rolling(5).mean().iloc[-1])
-        media20 = float(close.rolling(20).mean().iloc[-1])
+        closes = [float(c[4]) for c in candles]
 
-        rsi = float(calcular_rsi(close).iloc[-1])
-        variacao = (ultimo - anterior) / anterior
-
-        score = 0
-
-        # Tendência
-        if media5 > media20:
-            score += 30
-        else:
-            score -= 30
-
-        # Momentum
-        if variacao > 0:
-            score += 20
-        else:
-            score -= 20
-
-        # RSI
-        if rsi < 30:
-            score += 30
-        elif rsi > 70:
-            score -= 30
-
-        # Filtro lateralização
-        if abs(variacao) < 0.001:
-            return None
-
-        if score >= 60:
-            return {
-                "tipo": "COMPRA 🚀",
-                "score": score,
-                "rsi": round(rsi, 2),
-                "preco": round(ultimo, 2)
-            }
-
-        elif score <= -60:
-            return {
-                "tipo": "VENDA 🔻",
-                "score": score,
-                "rsi": round(rsi, 2),
-                "preco": round(ultimo, 2)
-            }
-
-        return None
+        return closes
 
     except Exception as e:
-        print("Erro análise:", e)
+        print(f"Erro conexão: {e}")
         return None
 
-# =========================
-# MENSAGEM
-# =========================
-def formatar_msg(par, sinal):
-    return f"""
-📊 SINAL INSTITUCIONAL
+# ==============================
+# INDICADORES
+# ==============================
+def calcular_ema(data, periodo):
+    return pd.Series(data).ewm(span=periodo).mean().iloc[-1]
 
-Ativo: {par}
-Tipo: {sinal['tipo']}
-Preço: {sinal['preco']}
-RSI: {sinal['rsi']}
-Score: {sinal['score']}
+def calcular_rsi(data, periodo=14):
+    series = pd.Series(data)
+    delta = series.diff()
 
-⚠️ Gestão de risco recomendada
-"""
+    gain = (delta.where(delta > 0, 0)).rolling(periodo).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(periodo).mean()
 
-# =========================
-# LOOP
-# =========================
-def rodar():
-    pares = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"]
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
 
-    print("💎 MODO INSTITUCIONAL ATIVO")
+    return rsi.iloc[-1]
 
-    while True:
-        print("🔄 Nova execução...")
+# ==============================
+# ESTRATÉGIA (AGRESSIVA)
+# ==============================
+def analisar(par, dados):
+    if dados is None or len(dados) < 50:
+        return None
 
-        for par in pares:
-            df = pegar_dados(par)
+    preco = dados[-1]
 
-            if df is None or df.empty:
-                print(f"{par} sem dados")
-                continue
+    ema9 = calcular_ema(dados, 9)
+    ema21 = calcular_ema(dados, 21)
+    rsi = calcular_rsi(dados)
 
-            sinal = analisar(df)
+    # 🎯 Lógica agressiva
+    if preco > ema9 > ema21 and rsi < 70:
+        return f"🚀 COMPRA {par}\nPreço: {preco:.2f}\nRSI: {rsi:.1f}"
 
-            if sinal:
-                msg = formatar_msg(par, sinal)
-                print(msg)
-                enviar_mensagem(msg)
-            else:
-                print(f"{par} filtrado")
+    if preco < ema9 < ema21 and rsi > 30:
+        return f"🔻 VENDA {par}\nPreço: {preco:.2f}\nRSI: {rsi:.1f}"
 
-        print("💓 Bot vivo...")
-        time.sleep(120)
+    return None
 
-rodar()
+# ==============================
+# LOOP PRINCIPAL
+# ==============================
+pares = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"]
+
+print("💎 BOT INSTITUCIONAL ATIVO")
+enviar_mensagem("💎 BOT INSTITUCIONAL ATIVO")
+
+while True:
+    print("\n🔄 Nova execução...")
+
+    for par in pares:
+        dados = get_data(par)
+
+        if dados is None:
+            print(f"{par} sem dados")
+            continue
+
+        sinal = analisar(par, dados)
+
+        if sinal:
+            print(sinal)
+            enviar_mensagem(sinal)
+        else:
+            print(f"{par} sem sinal")
+
+    time.sleep(60)
