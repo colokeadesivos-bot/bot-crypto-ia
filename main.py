@@ -16,36 +16,58 @@ def enviar_mensagem(msg):
         print("Erro Telegram")
 
 # =========================
-# BYBIT API (BLINDADO)
+# DADOS (BYBIT + BINANCE)
 # =========================
 def pegar_dados(par):
+
+    # ===== BYBIT =====
     try:
         url = f"https://api.bybit.com/v5/market/kline?category=linear&symbol={par}&interval=5&limit=100"
-
         r = requests.get(url, timeout=10)
 
-        if r.status_code != 200:
-            return None
+        if r.status_code == 200:
+            data = r.json()
+            lista = data.get("result", {}).get("list", [])
 
-        data = r.json()
-        lista = data.get("result", {}).get("list", [])
+            if lista:
+                df = pd.DataFrame(lista)
+                df = df[::-1]
 
-        if not lista:
-            return None
+                df = df[[4]]
+                df.columns = ["Close"]
 
-        df = pd.DataFrame(lista)
-        df = df[::-1]
+                df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
+                df.dropna(inplace=True)
 
-        df = df[[4]]
-        df.columns = ["Close"]
-
-        df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
-        df.dropna(inplace=True)
-
-        return df
-
+                print(f"{par} OK (Bybit)")
+                return df
     except:
-        return None
+        print(f"{par} erro Bybit")
+
+    # ===== BINANCE =====
+    try:
+        url = f"https://api.binance.com/api/v3/klines?symbol={par}&interval=5m&limit=100"
+        r = requests.get(url, timeout=10)
+
+        if r.status_code == 200:
+            data = r.json()
+
+            if data:
+                df = pd.DataFrame(data)
+
+                df = df[[4]]
+                df.columns = ["Close"]
+
+                df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
+                df.dropna(inplace=True)
+
+                print(f"{par} OK (Binance)")
+                return df
+    except:
+        print(f"{par} erro Binance")
+
+    print(f"{par} sem dados (falha total)")
+    return None
 
 # =========================
 # RSI
@@ -101,11 +123,10 @@ def analisar(df):
         elif rsi > 70:
             score -= 30
 
-        # FILTRO INSTITUCIONAL
+        # Filtro lateralização
         if abs(variacao) < 0.001:
-            return None  # evita lateralização
+            return None
 
-        # DECISÃO
         if score >= 60:
             return {
                 "tipo": "COMPRA 🚀",
@@ -129,7 +150,7 @@ def analisar(df):
         return None
 
 # =========================
-# GERADOR DE MENSAGEM
+# MENSAGEM
 # =========================
 def formatar_msg(par, sinal):
     return f"""
@@ -145,7 +166,7 @@ Score: {sinal['score']}
 """
 
 # =========================
-# LOOP PRINCIPAL
+# LOOP
 # =========================
 def rodar():
     pares = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"]
@@ -169,9 +190,9 @@ def rodar():
                 print(msg)
                 enviar_mensagem(msg)
             else:
-                print(f"{par} filtrado (sem qualidade)")
+                print(f"{par} filtrado")
 
-        print("💓 Sistema rodando...")
-        time.sleep(90)
+        print("💓 Bot vivo...")
+        time.sleep(120)
 
 rodar()
