@@ -5,47 +5,50 @@ import numpy as np
 # ==============================
 # CONFIG
 # ==============================
+TOKEN = "SEU_TOKEN_AQUI"
 CHAT_ID = "8784442046"
-TOKEN = "8748500939:AAHAG6DctidBW4fVp2QQWgbiI-7mjWXt0O8"
 
-SYMBOLS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"]
+PARES = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"]
+
+ULTIMO_SINAL = {}
 
 # ==============================
 # TELEGRAM
 # ==============================
-def send(msg):
+def enviar(msg):
     try:
         url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-        requests.post(url, json={"chat_id": CHAT_ID, "text": msg})
+        requests.post(url, json={
+            "chat_id": CHAT_ID,
+            "text": msg,
+            "parse_mode": "HTML"
+        }, timeout=5)
     except:
         print("Erro Telegram")
 
 # ==============================
 # RSI
 # ==============================
-def rsi(prices, period=14):
-    prices = np.array(prices, dtype=float)
-
-    if len(prices) < period + 1:
+def calcular_rsi(precos, periodo=14):
+    if len(precos) < periodo + 1:
         return None
 
-    delta = np.diff(prices)
-    gain = np.where(delta > 0, delta, 0)
-    loss = np.where(delta < 0, -delta, 0)
+    delta = np.diff(precos)
+    ganhos = np.where(delta > 0, delta, 0)
+    perdas = np.where(delta < 0, -delta, 0)
 
-    avg_gain = np.mean(gain[-period:])
-    avg_loss = np.mean(loss[-period:])
+    media_ganho = np.mean(ganhos[-periodo:])
+    media_perda = np.mean(perdas[-periodo:])
 
-    if avg_loss == 0:
+    if media_perda == 0:
         return 100
 
-    rs = avg_gain / avg_loss
+    rs = media_ganho / media_perda
     return 100 - (100 / (1 + rs))
 
 # ==============================
-# APIs (MULTI BACKUP)
+# APIs
 # ==============================
-
 def get_bybit(symbol):
     try:
         url = "https://api.bybit.com/v5/market/kline"
@@ -55,132 +58,99 @@ def get_bybit(symbol):
             "interval": "1",
             "limit": 100
         }
-
         r = requests.get(url, params=params, timeout=5)
-
-        if r.status_code != 200:
-            return None
-
         data = r.json()
 
-        if data.get("retCode") != 0:
-            return None
-
-        candles = data["result"]["list"]
-        candles.reverse()
-
-        return [float(c[4]) for c in candles]
-
+        if data.get("retCode") == 0:
+            candles = data["result"]["list"]
+            candles = candles[::-1]
+            return [float(c[4]) for c in candles]
     except:
         return None
-
 
 def get_binance(symbol):
     try:
         url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=100"
         r = requests.get(url, timeout=5)
-
-        if r.status_code != 200:
-            return None
-
         data = r.json()
-
-        if not isinstance(data, list):
-            return None
-
         return [float(c[4]) for c in data]
-
     except:
         return None
-
 
 def get_okx(symbol):
     try:
         inst = symbol.replace("USDT", "-USDT")
-
         url = f"https://www.okx.com/api/v5/market/candles?instId={inst}&bar=1m&limit=100"
-
         r = requests.get(url, timeout=5)
-
-        if r.status_code != 200:
-            return None
-
         data = r.json()
 
-        if "data" not in data:
-            return None
-
-        candles = data["data"]
-        candles.reverse()
+        candles = data.get("data", [])
+        candles = candles[::-1]
 
         return [float(c[4]) for c in candles]
-
     except:
         return None
 
 # ==============================
-# COLETOR INTELIGENTE
+# COLETAR DADOS (fallback)
 # ==============================
 def get_data(symbol):
-    fontes = [get_bybit, get_binance, get_okx]
-
-    for fonte in fontes:
-        data = fonte(symbol)
-        if data and len(data) > 20:
-            return data
-
+    for fonte in [get_bybit, get_binance, get_okx]:
+        dados = fonte(symbol)
+        if dados and len(dados) > 20:
+            return dados
     return None
 
 # ==============================
-# MODO INSTITUCIONAL + SNIPER
+# LÓGICA DE SINAL
 # ==============================
-def analisar(symbol):
-    prices = get_data(symbol)
+def analisar(symbol, precos):
+    rsi = calcular_rsi(precos)
 
-    if not prices:
-        print(f"{symbol} sem dados")
+    if rsi is None:
         return
 
-    r = rsi(prices)
-    price = prices[-1]
+    preco = precos[-1]
 
-    if r is None:
-        return
+    sinal = None
+    msg = ""
 
-    print(f"{symbol} | RSI: {round(r,1)} | Preço: {price}")
+    # SNIPER (entrada forte)
+    if rsi < 30:
+        sinal = "BUY_SNIPER"
+        msg = f"🔥 <b>COMPRA SNIPER {symbol}</b>\nPreço: {preco:.2f}\nRSI: {rsi:.1f}"
 
-    # ======================
-    # SNIPER (ENTRADA FORTE)
-    # ======================
-    if r < 30:
-        send(f"🔥 COMPRA SNIPER {symbol}\nPreço: {price}\nRSI: {round(r,1)}")
-    
-    elif r > 70:
-        send(f"🔥 VENDA SNIPER {symbol}\nPreço: {price}\nRSI: {round(r,1)}")
+    elif rsi > 70:
+        sinal = "SELL_SNIPER"
+        msg = f"🔻 <b>VENDA FORTE {symbol}</b>\nPreço: {preco:.2f}\nRSI: {rsi:.1f}"
 
-    # ======================
-    # INSTITUCIONAL (CONFIRMAÇÃO)
-    # ======================
-    elif 30 < r < 40:
-        send(f"📈 POSSÍVEL COMPRA {symbol}\nRSI: {round(r,1)}")
+    # Institucional (confirmação)
+    elif rsi < 40:
+        sinal = "BUY"
+        msg = f"📈 <b>Possível COMPRA {symbol}</b>\nRSI: {rsi:.1f}"
 
-    elif 60 < r < 70:
-        send(f"📉 POSSÍVEL VENDA {symbol}\nRSI: {round(r,1)}")
+    elif rsi > 60:
+        sinal = "SELL"
+        msg = f"📉 <b>Possível VENDA {symbol}</b>\nRSI: {rsi:.1f}"
+
+    # Anti-spam
+    if sinal:
+        if ULTIMO_SINAL.get(symbol) != sinal:
+            enviar(msg)
+            ULTIMO_SINAL[symbol] = sinal
 
 # ==============================
 # LOOP PRINCIPAL
 # ==============================
-print("💎 BOT INSTITUCIONAL REAL ATIVO")
+print("💎 BOT INSTITUCIONAL ATIVO")
 
 while True:
-    try:
-        for s in SYMBOLS:
-            analisar(s)
-            time.sleep(2)
+    for par in PARES:
+        dados = get_data(par)
 
-        print("⏳ Nova execução...\n")
-        time.sleep(15)
+        if dados:
+            analisar(par, dados)
+        else:
+            print(f"{par} sem dados")
 
-    except Exception as e:
-        print("Erro geral:", e)
-        time.sleep(10)
+    time.sleep(30)
