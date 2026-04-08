@@ -2,69 +2,36 @@ import requests
 import time
 import numpy as np
 
-# ==============================
+# =========================
 # CONFIG
-# ==============================
-TOKEN = "SEU_TOKEN_AQUI"
+# =========================
 CHAT_ID = "8784442046"
+TOKEN = "SEU_TOKEN_AQUI"
 
-PARES = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"]
+SYMBOLS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"]
 
-ULTIMO_SINAL = {}
-
-# ==============================
+# =========================
 # TELEGRAM
-# ==============================
-def enviar(msg):
+# =========================
+def send(msg):
     try:
         url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-        requests.post(url, json={
-            "chat_id": CHAT_ID,
-            "text": msg,
-            "parse_mode": "HTML"
-        }, timeout=5)
+        requests.post(url, json={"chat_id": CHAT_ID, "text": msg})
     except:
         print("Erro Telegram")
 
-# ==============================
-# RSI
-# ==============================
-def calcular_rsi(precos, periodo=14):
-    if len(precos) < periodo + 1:
-        return None
-
-    delta = np.diff(precos)
-    ganhos = np.where(delta > 0, delta, 0)
-    perdas = np.where(delta < 0, -delta, 0)
-
-    media_ganho = np.mean(ganhos[-periodo:])
-    media_perda = np.mean(perdas[-periodo:])
-
-    if media_perda == 0:
-        return 100
-
-    rs = media_ganho / media_perda
-    return 100 - (100 / (1 + rs))
-
-# ==============================
-# APIs
-# ==============================
+# =========================
+# APIs (MULTI BACKUP)
+# =========================
 def get_bybit(symbol):
     try:
         url = "https://api.bybit.com/v5/market/kline"
-        params = {
-            "category": "linear",
-            "symbol": symbol,
-            "interval": "1",
-            "limit": 100
-        }
+        params = {"category": "linear", "symbol": symbol, "interval": "1", "limit": 100}
         r = requests.get(url, params=params, timeout=5)
         data = r.json()
-
         if data.get("retCode") == 0:
             candles = data["result"]["list"]
-            candles = candles[::-1]
-            return [float(c[4]) for c in candles]
+            return [float(c[4]) for c in candles[::-1]]
     except:
         return None
 
@@ -72,8 +39,7 @@ def get_binance(symbol):
     try:
         url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=100"
         r = requests.get(url, timeout=5)
-        data = r.json()
-        return [float(c[4]) for c in data]
+        return [float(c[4]) for c in r.json()]
     except:
         return None
 
@@ -83,74 +49,124 @@ def get_okx(symbol):
         url = f"https://www.okx.com/api/v5/market/candles?instId={inst}&bar=1m&limit=100"
         r = requests.get(url, timeout=5)
         data = r.json()
-
         candles = data.get("data", [])
-        candles = candles[::-1]
-
-        return [float(c[4]) for c in candles]
+        return [float(c[4]) for c in candles[::-1]]
     except:
         return None
 
-# ==============================
-# COLETAR DADOS (fallback)
-# ==============================
 def get_data(symbol):
-    for fonte in [get_bybit, get_binance, get_okx]:
-        dados = fonte(symbol)
-        if dados and len(dados) > 20:
-            return dados
+    for source in [get_bybit, get_binance, get_okx]:
+        data = source(symbol)
+        if data and len(data) > 50:
+            return data
     return None
 
-# ==============================
-# LÓGICA DE SINAL
-# ==============================
-def analisar(symbol, precos):
-    rsi = calcular_rsi(precos)
+# =========================
+# INDICADORES
+# =========================
+def ema(prices, period):
+    return np.mean(prices[-period:])
 
-    if rsi is None:
-        return
+def rsi_inteligente(prices, period=14):
+    deltas = np.diff(prices)
+    gain = np.maximum(deltas, 0)
+    loss = np.abs(np.minimum(deltas, 0))
 
-    preco = precos[-1]
+    avg_gain = np.mean(gain[-period:])
+    avg_loss = np.mean(loss[-period:])
 
-    sinal = None
-    msg = ""
+    if avg_loss == 0:
+        return 100
 
-    # SNIPER (entrada forte)
-    if rsi < 30:
-        sinal = "BUY_SNIPER"
-        msg = f"🔥 <b>COMPRA SNIPER {symbol}</b>\nPreço: {preco:.2f}\nRSI: {rsi:.1f}"
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
 
-    elif rsi > 70:
-        sinal = "SELL_SNIPER"
-        msg = f"🔻 <b>VENDA FORTE {symbol}</b>\nPreço: {preco:.2f}\nRSI: {rsi:.1f}"
+    # ajuste dinâmico
+    vol = np.std(prices[-20:])
+    return rsi - 2 if vol > 0.5 else rsi + 2
 
-    # Institucional (confirmação)
-    elif rsi < 40:
-        sinal = "BUY"
-        msg = f"📈 <b>Possível COMPRA {symbol}</b>\nRSI: {rsi:.1f}"
+# =========================
+# FILTROS INSTITUCIONAIS
+# =========================
+def tendencia_forte(prices):
+    ema9 = ema(prices, 9)
+    ema21 = ema(prices, 21)
 
-    elif rsi > 60:
-        sinal = "SELL"
-        msg = f"📉 <b>Possível VENDA {symbol}</b>\nRSI: {rsi:.1f}"
+    direcao = ema9 - ema21
+    inclinacao = ema(prices[-5:], 3) - ema(prices[-10:-5], 3)
 
-    # Anti-spam
-    if sinal:
-        if ULTIMO_SINAL.get(symbol) != sinal:
-            enviar(msg)
-            ULTIMO_SINAL[symbol] = sinal
+    return direcao > 0 and inclinacao > 0
 
-# ==============================
+def mercado_lateral(prices):
+    media = np.mean(prices[-20:])
+    ult = prices[-1]
+    return abs(ult - media) / media < 0.002
+
+def filtro_final(prices):
+    ult = prices[-1]
+    media = np.mean(prices[-20:])
+    dist = abs(ult - media) / media
+    return dist > 0.0015
+
+# =========================
+# ANTI-SPAM
+# =========================
+last_signal = {}
+
+def pode_enviar(symbol, tipo):
+    key = f"{symbol}_{tipo}"
+    now = time.time()
+
+    if key not in last_signal or now - last_signal[key] > 300:
+        last_signal[key] = now
+        return True
+    return False
+
+# =========================
 # LOOP PRINCIPAL
-# ==============================
-print("💎 BOT INSTITUCIONAL ATIVO")
+# =========================
+print("💎 BOT INSTITUCIONAL ABSURDO ATIVO")
 
 while True:
-    for par in PARES:
-        dados = get_data(par)
+    for symbol in SYMBOLS:
 
-        if dados:
-            analisar(par, dados)
+        prices = get_data(symbol)
+
+        if not prices:
+            print(symbol, "sem dados")
+            continue
+
+        r = rsi_inteligente(prices)
+        price = prices[-1]
+
+        trend = tendencia_forte(prices)
+        lateral = mercado_lateral(prices)
+        confirm = filtro_final(prices)
+
+        print(f"{symbol} | RSI: {round(r,1)}")
+
+        # =====================
+        # 🔥 SNIPER
+        # =====================
+        if r < 28 and trend and confirm and not lateral:
+            if pode_enviar(symbol, "SNIPER"):
+                send(f"🔥 COMPRA SNIPER {symbol}\nPreço: {price}\nRSI: {round(r,1)}")
+
+        # =====================
+        # 📈 COMPRA
+        # =====================
+        elif r < 35 and trend and confirm and not lateral:
+            if pode_enviar(symbol, "BUY"):
+                send(f"📈 COMPRA {symbol}\nPreço: {price}\nRSI: {round(r,1)}")
+
+        # =====================
+        # 🔻 VENDA
+        # =====================
+        elif r > 68 and not trend and confirm:
+            if pode_enviar(symbol, "SELL"):
+                send(f"🔻 VENDA {symbol}\nPreço: {price}\nRSI: {round(r,1)}")
+
         else:
-            print(f"{par} sem dados")
+            print(symbol, "neutro")
 
-    time.sleep(30)
+    time.sleep(60)
